@@ -1,15 +1,12 @@
-// lib/screens/admin/admin_chat_detail_screen.dart
-
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:sipatka/models/user_model.dart';
+import 'package:sipatka/main.dart';
+import 'package:sipatka/models/profile_model.dart';
 import 'package:sipatka/providers/auth_provider.dart';
-import 'package:sipatka/utils/app_theme.dart';
 
 class AdminChatDetailScreen extends StatefulWidget {
-  final UserModel parent;
-  const AdminChatDetailScreen({super.key, required this.parent});
+  final Profile user;
+  const AdminChatDetailScreen({super.key, required this.user});
 
   @override
   State<AdminChatDetailScreen> createState() => _AdminChatDetailScreenState();
@@ -17,115 +14,88 @@ class AdminChatDetailScreen extends StatefulWidget {
 
 class _AdminChatDetailScreenState extends State<AdminChatDetailScreen> {
   final _messageController = TextEditingController();
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  late final Stream<List<Map<String, dynamic>>> _messagesStream;
+  late final String _adminId;
 
-  void _sendMessage(String adminId) {
-    if (_messageController.text.trim().isEmpty) return;
+  @override
+  void initState() {
+    super.initState();
+    _adminId = context.read<AuthProvider>().profile!.id;
+    _messagesStream = supabase
+        .from('messages')
+        .stream(primaryKey: ['id'])
+        .eq('user_id', widget.user.id)
+        .order('created_at', ascending: false);
+  }
 
-    // Path ke chat wali murid yang dituju
-    final chatPath = _firestore
-        .collection('chats')
-        .doc(widget.parent.uid) // Gunakan UID wali murid sebagai ID dokumen chat
-        .collection('messages');
+  Future<void> _sendMessage() async {
+    final content = _messageController.text.trim();
+    if (content.isEmpty) return;
 
-    chatPath.add({
-      'text': _messageController.text.trim(),
-      'senderId': adminId, // ID pengirim adalah ID admin yang sedang login
-      'senderRole': 'admin',
-      'timestamp': FieldValue.serverTimestamp(),
+    await supabase.from('messages').insert({
+      'user_id': widget.user.id,
+      'sender_id': _adminId,
+      'content': content,
     });
-
     _messageController.clear();
   }
 
   @override
   Widget build(BuildContext context) {
-    // Dapatkan ID admin yang sedang login
-    final adminId =
-        Provider.of<AuthProvider>(context, listen: false).userModel!.uid;
-
     return Scaffold(
-      appBar: AppBar(
-        title: Text("Chat dengan ${widget.parent.parentName}"),
-      ),
+      appBar: AppBar(title: Text("Chat dengan ${widget.user.parentName ?? 'Wali'}")),
       body: Column(
         children: [
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: _firestore
-                  .collection('chats')
-                  .doc(widget.parent.uid) // Baca dari dokumen chat milik wali murid
-                  .collection('messages')
-                  .orderBy('timestamp', descending: true)
-                  .snapshots(),
+            child: StreamBuilder<List<Map<String, dynamic>>>(
+              stream: _messagesStream,
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return Center(
-                    child: Text(
-                        "Belum ada percakapan dengan ${widget.parent.parentName}."),
-                  );
+                if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                  return Center(child: Text("Mulai percakapan dengan ${widget.user.parentName ?? 'wali'}."));
                 }
-                final messages = snapshot.data!.docs;
+                final messages = snapshot.data!;
                 return ListView.builder(
                   reverse: true,
                   padding: const EdgeInsets.all(16),
                   itemCount: messages.length,
                   itemBuilder: (context, index) {
-                    final messageData =
-                        messages[index].data() as Map<String, dynamic>;
-                    
-                    // Cek apakah pengirim pesan adalah admin
-                    final bool isAdminSender = messageData['senderRole'] == 'admin';
-
-                    return _buildMessageBubble(
-                      text: messageData['text'] ?? '',
-                      isFromAdmin: isAdminSender,
-                    );
+                    final message = messages[index];
+                    final isAdminSender = message['sender_id'] == _adminId;
+                    return _buildMessageBubble(text: message['content'], isFromAdmin: isAdminSender);
                   },
                 );
               },
             ),
           ),
-          // Input area
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                    color: Colors.grey.withOpacity(0.1),
-                    spreadRadius: 1,
-                    blurRadius: 4),
-              ],
+          _buildChatInput(),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildChatInput() {
+    return Container(
+      padding: const EdgeInsets.all(8.0).copyWith(bottom: MediaQuery.of(context).padding.bottom + 8),
+      color: Theme.of(context).cardColor,
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _messageController,
+              decoration: const InputDecoration(
+                hintText: 'Ketik pesan...',
+                filled: false,
+              ),
             ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    decoration: InputDecoration(
-                      hintText: 'Ketik balasan...',
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(25),
-                          borderSide: BorderSide.none),
-                      fillColor: Colors.grey[200],
-                      filled: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                FloatingActionButton(
-                  onPressed: () => _sendMessage(adminId),
-                  mini: true,
-                  child: const Icon(Icons.send),
-                ),
-              ],
-            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton.filled(
+            onPressed: _sendMessage,
+            icon: const Icon(Icons.send),
+            style: IconButton.styleFrom(backgroundColor: Theme.of(context).primaryColor),
           ),
         ],
       ),
@@ -133,49 +103,19 @@ class _AdminChatDetailScreenState extends State<AdminChatDetailScreen> {
   }
 
   Widget _buildMessageBubble({required String text, required bool isFromAdmin}) {
-    // Jika pesan dari admin, tampilkan di kanan. Jika dari user, di kiri.
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        mainAxisAlignment:
-            isFromAdmin ? MainAxisAlignment.end : MainAxisAlignment.start,
-        children: [
-          // Tampilkan avatar user jika pesan bukan dari admin
-          if (!isFromAdmin) ...[
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: AppTheme.accentColor,
-              child: const Icon(Icons.person, size: 16, color: Colors.white),
-            ),
-            const SizedBox(width: 8),
-          ],
-          Flexible(
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isFromAdmin
-                    ? AppTheme.primaryColor.withOpacity(0.9)
-                    : Colors.grey[200],
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Text(
-                text,
-                style: TextStyle(
-                  color: isFromAdmin ? Colors.white : Colors.black87,
-                ),
-              ),
-            ),
-          ),
-          // Tampilkan avatar admin jika pesan dari admin
-          if (isFromAdmin) ...[
-            const SizedBox(width: 8),
-            const CircleAvatar(
-              radius: 16,
-              backgroundColor: AppTheme.primaryColor,
-              child: Icon(Icons.support_agent, size: 16, color: Colors.white),
-            ),
-          ],
-        ],
+    return Align(
+      alignment: isFromAdmin ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isFromAdmin ? Theme.of(context).primaryColor : Colors.grey[300],
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(color: isFromAdmin ? Colors.white : Colors.black87),
+        ),
       ),
     );
   }

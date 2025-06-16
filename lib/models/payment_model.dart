@@ -1,107 +1,65 @@
-// lib/models/payment_model.dart
-
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/material.dart';
-
 enum PaymentStatus { paid, pending, unpaid, overdue }
 
 class Payment {
   final String id;
-  final String userId;
+  final String studentId;
   final String month;
+  final int year;
   final double amount;
   final DateTime dueDate;
-  PaymentStatus status;
   final DateTime? paidDate;
-  final String? paymentMethod;
-  final String? proofOfPaymentUrl;
-  final bool isVerified;
-  final double denda;
-  final bool dendaDiterapkan;
+  final String? proofUrl;
+  final PaymentStatus status;
+
+  // Data tambahan dari join
+  final String? studentName;
+  final String? parentName;
 
   Payment({
     required this.id,
-    required this.userId,
+    required this.studentId,
     required this.month,
+    required this.year,
     required this.amount,
     required this.dueDate,
-    required this.status,
     this.paidDate,
-    this.paymentMethod,
-    this.proofOfPaymentUrl,
-    this.isVerified = false,
-    this.denda = 0.0,
-    this.dendaDiterapkan = false,
+    this.proofUrl,
+    required this.status,
+    this.studentName,
+    this.parentName,
   });
 
-  factory Payment.fromFirestore(DocumentSnapshot doc) {
-    Map data = doc.data() as Map<String, dynamic>;
-    String statusString = data['status'] ?? 'unpaid';
-    PaymentStatus status;
+  factory Payment.fromMap(Map<String, dynamic> map) {
+    PaymentStatus currentStatus;
+    String statusString = map['status'] ?? 'unpaid';
 
-    switch (statusString) {
-      case 'paid':
-        status = PaymentStatus.paid;
-        break;
-      case 'pending':
-        status = PaymentStatus.pending;
-        break;
-      default:
-        status = PaymentStatus.unpaid;
+    if (statusString == 'paid') {
+      currentStatus = PaymentStatus.paid;
+    } else if (statusString == 'pending') {
+      currentStatus = PaymentStatus.pending;
+    } else { // unpaid
+      if (DateTime.parse(map['due_date']).isBefore(DateTime.now().subtract(const Duration(days: 1)))) {
+        currentStatus = PaymentStatus.overdue;
+      } else {
+        currentStatus = PaymentStatus.unpaid;
+      }
     }
 
-    if (status == PaymentStatus.unpaid &&
-        (data['dueDate'] as Timestamp).toDate().isBefore(DateTime.now())) {
-      status = PaymentStatus.overdue;
-    }
+    // Mengambil data siswa jika ada (dari join)
+    final profileData = map['students']?['profiles'];
 
     return Payment(
-      id: doc.id,
-      userId: data['userId'] ?? '',
-      month: data['month'] ?? '',
-      amount: (data['amount'] ?? 0.0).toDouble(),
-      dueDate: (data['dueDate'] as Timestamp).toDate(),
-      status: status,
-      paidDate: data['paidDate'] != null
-          ? (data['paidDate'] as Timestamp).toDate()
-          : null,
-      paymentMethod: data['paymentMethod'],
-      proofOfPaymentUrl: data['proofOfPaymentUrl'],
-      isVerified: data['isVerified'] ?? false,
-      denda: (data['denda'] ?? 0.0).toDouble(),
-      dendaDiterapkan: data['dendaDiterapkan'] ?? false,
+      id: map['id'],
+      studentId: map['student_id'],
+      month: map['month'],
+      year: map['year'],
+      amount: (map['amount'] as num).toDouble(),
+      dueDate: DateTime.parse(map['due_date']),
+      paidDate: map['paid_date'] != null ? DateTime.parse(map['paid_date']) : null,
+      proofUrl: map['proof_of_payment_url'],
+      status: currentStatus,
+      studentName: map['students']?['full_name'],
+      parentName: profileData?['full_name'],
     );
-  }
-}
-
-// --- TAMBAHKAN EXTENSION INI DI LUAR CLASS ---
-extension PaymentStatusInfo on Payment {
-  Map<String, dynamic> getStatusInfo() {
-    switch (status) {
-      case PaymentStatus.paid:
-        return {
-          'text': 'Lunas',
-          'color': Colors.green,
-          'icon': Icons.check_circle
-        };
-      case PaymentStatus.pending:
-        return {
-          'text': 'Menunggu Verifikasi',
-          'color': Colors.orange,
-          'icon': Icons.pending
-        };
-      case PaymentStatus.unpaid:
-        return {
-          'text': 'Belum Bayar',
-          'color': Colors.red,
-          'icon': Icons.error
-        };
-      case PaymentStatus.overdue:
-        return {
-          'text': 'Terlambat',
-          'color': Colors.red.shade800,
-          'icon': Icons.warning
-        };
-    }
   }
 }

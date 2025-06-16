@@ -1,131 +1,98 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:sipatka/models/user_model.dart';
+import 'package:sipatka/main.dart';
+import 'package:sipatka/models/profile_model.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AuthProvider with ChangeNotifier {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
-  UserModel? _userModel;
-  User? _firebaseUser;
+  final _supabase = supabase;
+  Profile? _profile;
   bool _isLoading = true;
 
-  UserModel? get userModel => _userModel;
-  bool get isLoggedIn => _firebaseUser != null;
+  Profile? get profile => _profile;
+  bool get isLoggedIn => _supabase.auth.currentSession != null;
+  String get userName => _profile?.parentName ?? '';
+  String get studentName => _profile?.studentName ?? '';
+  String get className => _profile?.className ?? '';
+  String get userRole => _profile?.role ?? 'user';
   bool get isLoading => _isLoading;
-  String get userName => _userModel?.parentName ?? '';
-  String get userEmail => _userModel?.email ?? '';
-  String get studentName => _userModel?.studentName ?? '';
-  String get className => _userModel?.className ?? '';
-  String get userRole => _userModel?.role ?? 'user';
 
   AuthProvider() {
-    _auth.authStateChanges().listen(_onAuthStateChanged);
+    // Listener ini sekarang hanya untuk handle perubahan di background (misal token refresh)
+    _supabase.auth.onAuthStateChange.listen((data) {
+      if (data.event == AuthChangeEvent.signedIn || data.event == AuthChangeEvent.tokenRefreshed) {
+        if(data.session != null) {
+            _fetchProfile(data.session!.user.id);
+        }
+      } else if (data.event == AuthChangeEvent.signedOut) {
+          _profile = null;
+          notifyListeners();
+      }
+    });
+    // Cek sesi awal
+    _initialize();
   }
-
-  Future<void> _onAuthStateChanged(User? user) async {
-    _firebaseUser = user;
-    if (user != null) {
-      await _fetchUserModel(user.uid);
-    } else {
-      _userModel = null;
+  
+  Future<void> _initialize() async {
+      final session = _supabase.auth.currentSession;
+      if (session != null) {
+        await _fetchProfile(session.user.id);
+      }
+      _isLoading = false;
+      notifyListeners();
+  }
+  
+  Future<void> _fetchProfile(String userId) async {
+    try {
+      final data = await _supabase
+          .from('profiles')
+          .select('*, students(*)')
+          .eq('id', userId)
+          .single();
+      _profile = Profile.fromMap(data);
+    } catch (e) {
+      print("Error fetching profile: $e");
+      _profile = null; // Pastikan null jika error
     }
-    _isLoading = false;
     notifyListeners();
   }
 
-  Future<void> _fetchUserModel(String uid) async {
+  // PERBAIKAN UTAMA ADA DI SINI
+  Future<String?> login(String email, String password) async {
     try {
-      final doc = await _firestore.collection('users').doc(uid).get();
-      if (doc.exists) {
-        _userModel = UserModel.fromFirestore(doc);
+      // 1. Coba login
+      final response = await _supabase.auth.signInWithPassword(email: email, password: password);
+      
+      // 2. Jika berhasil, JANGAN langsung selesai.
+      //    Tunggu sampai data profil (beserta role) berhasil diambil.
+      if (response.user != null) {
+        await _fetchProfile(response.user!.id);
       } else {
-        print("Dokumen user dengan UID $uid tidak ditemukan di Firestore.");
-        _userModel = null;
+        return "Gagal mendapatkan data user setelah login.";
       }
+      
+      return null; // Kembalikan null jika semua sukses
+    } on AuthException catch (e) {
+      return e.message;
     } catch (e) {
-      print("Error saat mengambil data user dari Firestore: $e");
-    }
-  }
-
-  Future<UserModel?> getUserModelById(String uid) async {
-    try {
-      final doc = await _firestore.collection('users').doc(uid).get();
-      if (doc.exists) {
-        return UserModel.fromFirestore(doc);
-      }
-    } catch (e) {
-      print("Error fetching user model by ID: $e");
-    }
-    return null;
-  }
-
-  // --- FUNGSI LOGIN DENGAN PERBAIKAN CATCH ERROR ---
-  Future<bool> login(String email, String password) async {
-    try {
-      // Tahap 1: Autentikasi
-      UserCredential userCredential = await _auth.signInWithEmailAndPassword(
-        email: email.trim(),
-        password: password.trim(),
-      );
-
-      // Tahap 2: Mengambil data dari Firestore
-      await _fetchUserModel(userCredential.user!.uid);
-
-      notifyListeners();
-      return true;
-    } catch (e) {
-      // Blok catch ini sekarang akan menangkap SEMUA jenis error
-      // (Baik dari Auth maupun dari Firestore)
-      print("!!! PENYEBAB LOGIN GAGAL: $e");
-      return false;
-    }
-  }
-
-  // --- FUNGSI REGISTER DENGAN PERBAIKAN CATCH ERROR ---
-  Future<bool> register({
-    required String parentName,
-    required String email,
-    required String password,
-    required String studentName,
-    required String className,
-  }) async {
-    try {
-      UserCredential userCredential =
-          await _auth.createUserWithEmailAndPassword(
-        email: email.trim(),
-        password: password.trim(),
-      );
-
-      User newUser = userCredential.user!;
-      _userModel = UserModel(
-          uid: newUser.uid,
-          email: email.trim(),
-          parentName: parentName,
-          studentName: studentName,
-          className: className,
-          role: 'user',
-          saldo: 0.0);
-
-      await _firestore
-          .collection('users')
-          .doc(newUser.uid)
-          .set(_userModel!.toMap());
-      await _fetchUserModel(newUser.uid);
-      notifyListeners();
-      return true;
-    } catch (e) {
-      // Blok catch ini juga menangkap SEMUA jenis error
-      print("!!! PENYEBAB REGISTER GAGAL: $e");
-      return false;
+      return 'Terjadi error tidak diketahui.';
     }
   }
 
   Future<void> logout() async {
-    await _auth.signOut();
-    _userModel = null;
-    _firebaseUser = null;
+    await _supabase.auth.signOut();
+    _profile = null;
     notifyListeners();
+  }
+
+  Future<String?> sendPasswordReset(String email) async {
+      try {
+          await _supabase.auth.resetPasswordForEmail(email);
+          return null;
+      } on AuthException catch(e) {
+          return e.message;
+      } catch (e) {
+          return 'Terjadi error tidak diketahui';
+      }
   }
 }

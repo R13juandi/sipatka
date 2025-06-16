@@ -1,13 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:sipatka/main.dart';
 import 'package:sipatka/providers/auth_provider.dart';
-import 'package:sipatka/screens/admin/manage_students_screen.dart';
 import 'package:sipatka/screens/admin/confirm_payments_screen.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:sipatka/screens/admin/laporan_keuangan_screen.dart';
+import 'package:sipatka/screens/admin/manage_students_screen.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AdminDashboardScreen extends StatelessWidget {
   const AdminDashboardScreen({super.key});
+
+  // Fungsi untuk mengambil jumlah pembayaran yang pending
+  Future<int> _getPendingCount() async {
+    try {
+      final res = await supabase.from('payments').count(CountOption.exact).eq('status', 'pending');
+      return res;
+    } catch (e) {
+      return 0;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -17,30 +28,7 @@ class AdminDashboardScreen extends StatelessWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
-            onPressed: () {
-              showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('Keluar'),
-                  content: const Text('Apakah Anda yakin ingin keluar?'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Batal'),
-                    ),
-                    TextButton(
-                      onPressed: () async {
-                        await context.read<AuthProvider>().logout();
-                        if (context.mounted) {
-                           Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
-                        }
-                      },
-                      child: const Text('Keluar'),
-                    ),
-                  ],
-                ),
-              );
-            },
+            onPressed: () => _showLogoutDialog(context),
           ),
         ],
       ),
@@ -52,68 +40,84 @@ class AdminDashboardScreen extends StatelessWidget {
         children: [
           _buildMenuCard(
             context,
-            title: 'Manajemen Siswa & Tagihan',
-            icon: Icons.people,
-            onTap: () {
-              Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => const ManageStudentsScreen()));
-            },
+            title: 'Manajemen Siswa',
+            icon: Icons.people_alt_outlined,
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ManageStudentsScreen())),
           ),
-          _buildMenuCard(
-            context,
-            title: 'Konfirmasi Pembayaran',
-            icon: Icons.check_circle,
-            onTap: () {
-              Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => const ConfirmPaymentsScreen()));
-            },
-          ),
-          _buildMenuCard(
-          context,
-            title: 'Laporan Keuangan',
-            icon: Icons.bar_chart,
-            onTap: () {
-              // Navigasi ke halaman laporan keuangan
-              Navigator.push(
+          FutureBuilder<int>(
+            future: _getPendingCount(),
+            builder: (context, snapshot) {
+              final count = snapshot.data ?? 0;
+              return _buildMenuCard(
                 context,
-                MaterialPageRoute(
-                    builder: (_) => const LaporanKeuanganScreen()),
+                title: 'Konfirmasi Pembayaran',
+                icon: Icons.check_circle_outline,
+                notificationCount: count,
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ConfirmPaymentsScreen())),
               );
             },
           ),
           _buildMenuCard(
             context,
-            title: 'Kirim Notifikasi',
-            icon: Icons.send,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Fitur sedang dikembangkan.')));
-            },
+            title: 'Laporan Keuangan',
+            icon: Icons.bar_chart_outlined,
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LaporanKeuanganScreen())),
+          ),
+          _buildMenuCard(
+            context,
+            title: 'Buat Akun Siswa',
+            icon: Icons.person_add_alt_1_outlined,
+            onTap: () => Navigator.pushNamed(context, '/admin_create_student'),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildMenuCard(BuildContext context,
-      {required String title, required IconData icon, required VoidCallback onTap}) {
+  Widget _buildMenuCard(BuildContext context, {required String title, required IconData icon, required VoidCallback onTap, int? notificationCount}) {
     return Card(
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: Stack(
           children: [
-            Icon(icon, size: 50, color: Theme.of(context).primaryColor),
-            const SizedBox(height: 12),
-            Text(title, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w600)),
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 50, color: Theme.of(context).primaryColor),
+                  const SizedBox(height: 12),
+                  Text(title, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+            if (notificationCount != null && notificationCount > 0)
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                  child: Text('$notificationCount', style: const TextStyle(color: Colors.white, fontSize: 12)),
+                ),
+              ),
           ],
         ),
       ),
     );
+  }
+  
+  void _showLogoutDialog(BuildContext context) {
+    showDialog(context: context, builder: (context) => AlertDialog(
+        title: const Text('Keluar'),
+        content: const Text('Apakah Anda yakin ingin keluar?'),
+        actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Batal')),
+            ElevatedButton(onPressed: () async {
+                await context.read<AuthProvider>().logout();
+                if(context.mounted) Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
+            }, child: const Text('Keluar'))
+        ],
+    ));
   }
 }
