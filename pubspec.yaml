@@ -30,7 +30,7 @@ flutter:
 
   # Bagian assets
   assets:
-    - assets/logo.png
+    - assets/images/logo.png
 
   # Bagian fonts
   fonts:
